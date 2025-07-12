@@ -183,34 +183,34 @@ jobs:
             checksums.txt
           token: ${{ secrets.GITHUB_TOKEN }}
 
-  # publish: //TODO: un comment on production
-  #   name: Publish Module
-  #   needs: [validate, build, release]
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
+  publish:
+    name: Publish Module
+    needs: [validate, build, release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-  #     - name: Set up Go
-  #       uses: actions/setup-go@v5
-  #       with:
-  #         go-version: ${{ env.GO_VERSION }}
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
 
-  #     - name: Trigger module proxy
-  #       run: |
-  #         VERSION=${{ needs.validate.outputs.version }}
-  #         MODULE_PATH="github.com/${{ github.repository }}"
+      - name: Trigger module proxy
+        run: |
+          VERSION=${{ needs.validate.outputs.version }}
+          MODULE_PATH="github.com/${{ github.repository }}"
           
-  #         # Request the module from the Go module proxy to ensure it's available
-  #         GOPROXY=https://proxy.golang.org go list -m "${MODULE_PATH}@${VERSION}"
+          # Request the module from the Go module proxy to ensure it's available
+          GOPROXY=https://proxy.golang.org go list -m "${MODULE_PATH}@${VERSION}"
 
-  #     - name: Verify module availability
-  #       run: |
-  #         VERSION=${{ needs.validate.outputs.version }}
-  #         MODULE_PATH="github.com/${{ github.repository }}"
+      - name: Verify module availability
+        run: |
+          VERSION=${{ needs.validate.outputs.version }}
+          MODULE_PATH="github.com/${{ github.repository }}"
           
-  #         # Wait a bit for propagation
-  #         sleep 30
+          # Wait a bit for propagation
+          sleep 30
           
-  #         # Verify the module is available
-  #         go list -m "${MODULE_PATH}@${VERSION}"
+          # Verify the module is available
+          go list -m "${MODULE_PATH}@${VERSION}"
