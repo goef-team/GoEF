@@ -1,0 +1,47 @@
+version: "2"
+
+run:
+  go: "1.24"
+  # timeout is disabled by default in v2, but you can add it back if needed
+  # timeout: 10m
+
+linters:
+  settings:
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment  # Can be overly strict for structs with embedded types
+    gocyclo:
+      min-complexity: 15
+    dupl:
+      threshold: 150
+    goconst:
+      min-len: 3
+      min-occurrences: 3
+
+  enable:
+    - errcheck
+    - staticcheck      # This now includes gosimple and stylecheck
+    - govet
+    - ineffassign
+    - unused
+    - misspell
+    - goconst
+    - dupl
+    - gosec
+
+  exclusions:
+    rules:
+      - path: '_test\.go'
+        linters:
+          - gosec
+          - dupl
+      - path: 'tests/'
+        linters:
+          - gosec
+          - dupl
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

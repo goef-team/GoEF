@@ -1,0 +1,216 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  GO_VERSION: "1.24.x"
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  validate:
+    name: Pre-release Validation
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      is_prerelease: ${{ steps.version.outputs.is_prerelease }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Extract version info
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          if [[ "$VERSION" == *"-"* ]]; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Validate version format
+        run: |
+          if [[ ! "${{ steps.version.outputs.version }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]]; then
+            echo "Invalid version format: ${{ steps.version.outputs.version }}"
+            exit 1
+          fi
+
+      - name: Run full test suite
+        run: |
+          go mod download
+          go test -race -v ./...
+
+      - name: Verify clean state
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Working directory is not clean"
+            git status
+            exit 1
+          fi
+
+  build:
+    name: Build Release Artifacts
+    needs: validate
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          VERSION=${{ needs.validate.outputs.version }}
+          BINARY_NAME=goef-${{ matrix.goos }}-${{ matrix.goarch }}
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            BINARY_NAME+=".exe"
+          fi
+          
+          cd cmd/goef
+          go build -ldflags="-s -w -X main.version=${VERSION} -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o "../../${BINARY_NAME}" .
+
+      - name: Test binary
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        run: |
+          ./goef-linux-amd64 --version
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: goef-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: goef-*
+
+  release:
+    name: Create GitHub Release
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          sha256sum goef-* > checksums.txt
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          VERSION=${{ needs.validate.outputs.version }}
+          PREV_TAG=$(git tag --sort=-version:refname | grep -v "${VERSION}" | head -n1)
+          
+          echo "## Changes in ${VERSION}" > release-notes.md
+          echo "" >> release-notes.md
+          
+          if [ -n "$PREV_TAG" ]; then
+            echo "### Commits since ${PREV_TAG}:" >> release-notes.md
+            git log --pretty=format:"- %s (%h)" "${PREV_TAG}..HEAD" >> release-notes.md
+          else
+            echo "- Initial release" >> release-notes.md
+          fi
+          
+          echo "" >> release-notes.md
+          echo "### Installation" >> release-notes.md
+          echo "" >> release-notes.md
+          echo "Download the appropriate binary for your platform:" >> release-notes.md
+          echo "" >> release-notes.md
+          echo "- **Linux (x64)**: \`goef-linux-amd64\`" >> release-notes.md
+          echo "- **Linux (ARM64)**: \`goef-linux-arm64\`" >> release-notes.md
+          echo "- **macOS (Intel)**: \`goef-darwin-amd64\`" >> release-notes.md
+          echo "- **macOS (Apple Silicon)**: \`goef-darwin-arm64\`" >> release-notes.md
+          echo "- **Windows (x64)**: \`goef-windows-amd64.exe\`" >> release-notes.md
+          echo "" >> release-notes.md
+          echo "### Verification" >> release-notes.md
+          echo "" >> release-notes.md
+          echo "Verify downloads using the provided \`checksums.txt\` file:" >> release-notes.md
+          echo "" >> release-notes.md
+          echo "\`\`\`bash" >> release-notes.md
+          echo "sha256sum -c checksums.txt" >> release-notes.md
+          echo "\`\`\`" >> release-notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ needs.validate.outputs.version }}
+          name: GoEF ${{ needs.validate.outputs.version }}
+          body_path: release-notes.md
+          prerelease: ${{ needs.validate.outputs.is_prerelease == 'true' }}
+          files: |
+            goef-*
+            checksums.txt
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # publish: //TODO: un comment on production
+  #   name: Publish Module
+  #   needs: [validate, build, release]
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@v4
+
+  #     - name: Set up Go
+  #       uses: actions/setup-go@v5
+  #       with:
+  #         go-version: ${{ env.GO_VERSION }}
+
+  #     - name: Trigger module proxy
+  #       run: |
+  #         VERSION=${{ needs.validate.outputs.version }}
+  #         MODULE_PATH="github.com/${{ github.repository }}"
+          
+  #         # Request the module from the Go module proxy to ensure it's available
+  #         GOPROXY=https://proxy.golang.org go list -m "${MODULE_PATH}@${VERSION}"
+
+  #     - name: Verify module availability
+  #       run: |
+  #         VERSION=${{ needs.validate.outputs.version }}
+  #         MODULE_PATH="github.com/${{ github.repository }}"
+          
+  #         # Wait a bit for propagation
+  #         sleep 30
+          
+  #         # Verify the module is available
+  #         go list -m "${MODULE_PATH}@${VERSION}"
